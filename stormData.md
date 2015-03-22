@@ -1,0 +1,201 @@
+# Reproducible Research: Peer Assessment 2
+
+
+# Economic and Public Health Impact of Severe Weather Events in the United States
+
+## Synopsis
+
+By analyzing the U.S. National Oceanic and Atmospheric Administration's (NOAA) storm database (data collected from 1950-2011), we can see the impact that severe weather events have had on the economy and public health of the United States and its citizens. After breaking this data down into major event types, it becomes clear that there are two weather events that cause more harm than any others: tornadoes are by far the most dangerous to life and limb, and flooding is most dangerous to the economy.
+
+## Data Processing
+
+First, it will be necessary to download and load the NOAA's storm database, which we will use for our analysis. As this data set is quite large, we'll check to see if this step has been previously accomplished rather than repeating it unnecessarily.
+
+
+```r
+library(R.utils)
+
+## Check if zip file is already downloaded. If not download to working directory and unzip the file.
+dataZIP <- "stormData.csv.bz2"
+dataCSV <- "stormData.csv"
+if (!file.exists(dataCSV)) {
+        download.file("https://d396qusza40orc.cloudfront.net/repdata%2Fdata%2FStormData.csv.bz2", destfile=dataZIP, method="curl")
+        bunzip2(dataZIP)
+}
+
+## Check to see if data is already loaded. If not, load data.
+if (!"stormData" %in% ls()) {
+        stormData <- read.csv(dataCSV, header=TRUE, sep=",")
+}
+```
+
+The next step will be to coalesce the event types into groups that we can use to summarise the data. This stands the risk of miscategorizing some data due to imprecise grouping decisions, but overall should allow us to better visualize the data. The grouping can be done by making some assumptions about the names in the EVTYPE field, and the assumptions that I've made are reflected in the following code:
+
+
+```r
+## Create a dataset copy to preserve the original data.
+stormGroup <- stormData
+
+## Convert event type field to characters to allow for easy renaming of elements
+stormGroup$EVTYPE <- as.character(stormGroup$EVTYPE)
+
+## Use a series of grep statements to group and rename event types
+stormGroup[grep("lightning*|thunder*|tstm*", stormGroup$EVTYPE, ignore.case=TRUE),]$EVTYPE <- c("Thunder/Lightning")
+stormGroup[grep("funnel*|tornado*|torndao", stormGroup$EVTYPE, ignore.case=TRUE),]$EVTYPE <- c("Tornado")
+stormGroup[grep("blizzard*|sleet*|snow*", stormGroup$EVTYPE, ignore.case=TRUE),]$EVTYPE <- c("Snow")
+stormGroup[grep("dam break|dam failure|fld*|fldg*|flood*|stream*|surf*|swells*|tsunami|water*", stormGroup$EVTYPE, ignore.case=TRUE),]$EVTYPE <- c("Flood")
+stormGroup[grep("wind*|wnd|gustnado|downburst*|microburst*", stormGroup$EVTYPE, ignore.case=TRUE),]$EVTYPE <- c("Wind")
+stormGroup[grep("driest*|drought*|dry*|dust*|heat*|high*|hot*|warm*", stormGroup$EVTYPE, ignore.case=TRUE),]$EVTYPE <- c("Heat")
+stormGroup[grep("hail*", stormGroup$EVTYPE, ignore.case=TRUE),]$EVTYPE <- c("Hail")
+stormGroup[grep("hurricane*|tropical storm*|typhoon", stormGroup$EVTYPE, ignore.case=TRUE),]$EVTYPE <- c("Hurricane")
+stormGroup[grep("depression*|percipi*|preci*|rain*|shower*|wet*", stormGroup$EVTYPE, ignore.case=TRUE),]$EVTYPE <- c("Rain")
+stormGroup[grep("fire*|smoke*", stormGroup$EVTYPE, ignore.case=TRUE),]$EVTYPE <- c("Smoke/Fire")
+stormGroup[grep("land*|slide*|avalanc*", stormGroup$EVTYPE, ignore.case=TRUE),]$EVTYPE <- c("Landslide/Avalanche")
+stormGroup[grep("current*|marine*|rough seas|tide*|wave*", stormGroup$EVTYPE, ignore.case=TRUE),]$EVTYPE <- c("Sea/Ocean")
+stormGroup[grep("chill*|cold*|cool*|freez*|frost*|glaze*|hypothermia|ice|icy|low", stormGroup$EVTYPE, ignore.case=TRUE),]$EVTYPE <- c("Cold")
+stormGroup[grep("fog*", stormGroup$EVTYPE, ignore.case=TRUE),]$EVTYPE <- c("Fog")
+stormGroup[grep("Thunder/Lightning|Tornado|Snow|Flood|Cold|Heat|Wind|Hail|Hurricane|Rain|Smoke/Fire|Landslide/Avalanche|Sea/Ocean|Fog", stormGroup$EVTYPE, invert=TRUE ),]$EVTYPE <- c("Other")
+
+## Return event type to factor to facillitate counts on this element
+stormGroup$EVTYPE <- as.factor(stormGroup$EVTYPE)
+```
+
+We have now broken our data set into 15 event types, distributed as follows:
+
+
+```r
+table(stormGroup$EVTYPE)
+```
+
+```
+## 
+##                Cold               Flood                 Fog 
+##                4639               91510                1834 
+##                Hail                Heat           Hurricane 
+##              289274               18204                 893 
+## Landslide/Avalanche               Other                Rain 
+##                1037                 293                 542 
+##           Sea/Ocean          Smoke/Fire                Snow 
+##                 960                4259               20534 
+##   Thunder/Lightning             Tornado                Wind 
+##              352587               67688               48043
+```
+
+### Public Health Processing
+
+We can now aggregate the number of injuries and fatalities across the weather events that we have just grouped and create a summary dataset that will allow us to plot those results to reach a conclusion.
+
+
+```r
+library(reshape2)
+library(ggplot2)
+
+## Aggregate and format data
+pubHealth <- aggregate(cbind(FATALITIES, INJURIES) ~ EVTYPE, stormGroup, sum)
+healthMelt <- melt(pubHealth, id.vars="EVTYPE", measure.vars=c("FATALITIES", "INJURIES"), variable.name="Outcome", value.name="Count")
+```
+
+## Property and Crop Damage Processing
+
+The property damage is represented in the data set as a combination of two fields: PROPDMG, a value, and PROPDMGEXP, an exponential multiplier. In order to calculate the actual value, we'll have to raise PROPDMG to the exponent listed in PROPDMGEXP. Unfortunately, the values PROPDMGEXP are inconsistent - sometimes being listed as a number, and sometimes as a letter or character. The character values are unknown, so we'll assign 0 to those values, but we know the letter values, and will assign them as follows:
+
+* "-","?" or "+" = 0
+* "H" or "h" = hundred, or 100
+* "K" or "k" = 1,000
+* "M" or "m" = 1,000,000
+* "B" or "b" = 1,000,000,000
+
+The crop damage data is arranged similarly, substituting CROP... for PROP... in the applicable fields. We'll modify that data the same way.
+
+We'll create a separate dataset to work with all this data, and to make the substitutions that we need to perform our calculations. We'll substitue a multiplier for the exponent values in order to be able to zero out the characters listed above, and as x^0=1, and the difference between 0 and 1 is negligible for these damage values, we'll use the same logic and zero out values with an exponent of zero, as well.
+
+
+
+```r
+## Create new data set
+damage <- stormGroup
+
+## Create multiplier fields 
+damage$propMult <- as.character(damage$PROPDMGEXP)
+damage$cropMult <- as.character(damage$CROPDMGEXP)
+
+## Substitute for PROP exponent data
+damage$propMult <- gsub("[-|?|+]", "0", damage$propMult)
+damage$propMult <- gsub("1", "10", damage$propMult)
+damage$propMult <- gsub("h|2", "100", damage$propMult, ignore.case=TRUE)
+damage$propMult <- gsub("k|3", "1000", damage$propMult, ignore.case=TRUE)
+damage$propMult <- gsub("4", "10000", damage$propMult)
+damage$propMult <- gsub("5", "100000", damage$propMult)
+damage$propMult <- gsub("m|6", "1000000", damage$propMult, ignore.case=TRUE)
+damage$propMult <- gsub("7", "10000000", damage$propMult)
+damage$propMult <- gsub("8", "100000000", damage$propMult)
+damage$propMult <- gsub("b|9", "1000000000", damage$propMult, ignore.case=TRUE)
+
+## Substitute for CROP exponent data
+damage$cropMult <- gsub("[-|?|+]", "0", damage$cropMult)
+damage$cropMult <- gsub("1", "10", damage$cropMult)
+damage$cropMult <- gsub("h|2", "100", damage$cropMult, ignore.case=TRUE)
+damage$cropMult <- gsub("k|3", "1000", damage$cropMult, ignore.case=TRUE)
+damage$cropMult <- gsub("4", "10000", damage$cropMult)
+damage$cropMult <- gsub("5", "100000", damage$cropMult)
+damage$cropMult <- gsub("m|6", "1000000", damage$cropMult, ignore.case=TRUE)
+damage$cropMult <- gsub("7", "10000000", damage$cropMult)
+damage$cropMult <- gsub("8", "100000000", damage$cropMult)
+damage$cropMult <- gsub("b|9", "1000000000", damage$cropMult, ignore.case=TRUE)
+
+## Convert multipliers to numeric
+damage$propMult <- as.numeric(damage$propMult)
+damage$cropMult <- as.numeric(damage$cropMult)
+
+## Calculate total property damage and create total field
+damage$propTot <- (damage$PROPDMG * damage$propMult)/10^9
+damage$cropTot <- (damage$CROPDMG * damage$cropMult)/10^9
+
+## Aggregate damages by Event Type and format data
+damageByEvent <- aggregate(cbind(propTot, cropTot) ~ EVTYPE, damage, sum)
+colnames(damageByEvent) <- c("Event", "Total Property Damage", "Total Crop Damage")
+
+damageMelt <- melt(damageByEvent, id.vars="Event", measure.vars=c("Total Property Damage", "Total Crop Damage"), variable.name="Outcome", value.name="Count")
+```
+
+## Results
+
+### Public Health Results
+
+In plotting the public health data that we created earlier, we can now visualize the number of injuries and fatalities across our severe weather groupings:
+
+
+```r
+## Plot Public Health Data
+ggplot(healthMelt, aes(x=EVTYPE, y=Count, fill=Outcome)) + 
+        geom_bar(position="dodge", stat="identity") + 
+        labs(x="Event Type") +
+        ggtitle("Injuries and Fatalities Due to Weather Events in the US") +
+        scale_fill_brewer(palette="Set1") +
+        theme(axis.text.x=element_text(angle=30,hjust=1))
+```
+
+![](stormData_files/figure-html/pubHealthPlot-1.png) 
+
+As the plot above clearly shows, there are four severe weather events that pose the greatest risk: Floods, Heat, Thunder/Lightning Storms, and Tornadoes. Among those, Tornadoes are by far the most dangerous. They cause 6 times the number of injuries, and nearly twice the number of fatalities as the second most dangerous weather events (Thunder/Lightning Storms and Heat, respectively).
+
+### Economic Damage Results
+
+Similarly, we can plot the damage to property and crops across the severe weather events that we have grouped. Doing so leads us to a clear conclusion:
+
+
+```r
+## Plot economic damage data 
+ggplot(damageMelt, aes(x=Event, y=Count)) +
+        geom_bar(stat="identity", fill="red3") +
+        labs(x = "Event Type") +
+        labs(y = "Cost in Billions of US Dollars") +
+        labs(title="Property and Crop Damage Due to Weather Events in the US") +
+        facet_wrap( ~ Outcome, ncol=1) +
+        theme(plot.title = element_text(lineheight=.8, face="bold"),
+              axis.text.x=element_text(angle=30,hjust=1))
+```
+
+![](stormData_files/figure-html/damagePlot-1.png) 
+
+Although there is significant economic damage done by a few of these weather events, there is one type that far supasses the others in impact: flooding causes over $150 billion of property damage and nearly $12 billion in crop damage. Heat, hurricanes, and tornadoes all contribute to the economic toll, but not one of them even a fith as much as the damage due to flooding.
